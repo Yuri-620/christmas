@@ -56,42 +56,6 @@
             display: inline-block;
         }
 
-        #upload-panel {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            text-align: center;
-            pointer-events: auto;
-            background: rgba(0, 0, 0, 0.8);
-            padding: 40px;
-            border-radius: 20px;
-            border: 2px solid #d4af37;
-            box-shadow: 0 0 30px rgba(212, 175, 55, 0.3);
-        }
-
-        #upload-panel.hidden { display: none; }
-
-        #upload-button {
-            padding: 15px 40px;
-            font-size: 1.2em;
-            background: linear-gradient(135deg, #d4af37 0%, #ffd700 100%);
-            color: #0a0e0a;
-            border: none;
-            border-radius: 30px;
-            cursor: pointer;
-            font-weight: bold;
-            box-shadow: 0 5px 20px rgba(212, 175, 55, 0.4);
-            transition: all 0.3s;
-            margin-top: 20px;
-        }
-
-        #upload-button:hover {
-            transform: scale(1.05);
-            box-shadow: 0 8px 30px rgba(212, 175, 55, 0.6);
-        }
-
-        #file-input { display: none; }
 
         #video-preview {
             position: absolute;
@@ -130,22 +94,13 @@
 <div id="ui-overlay">
     <div id="status-panel">
         <h1>🎄 手势圣诞树</h1>
-        <div id="gesture-status">点击"跳过"直接体验，或上传照片</div>
-    </div>
-
-    <div id="upload-panel">
-        <h2>上传您的圣诞照片</h2>
-        <p style="color: #ccc; margin: 15px 0;">选择多张照片组成圣诞树（可选）</p>
-        <input type="file" id="file-input" accept="image/*" multiple>
-        <button id="upload-button">选择照片</button>
-        <button id="skip-button" style="background: linear-gradient(135deg, #666 0%, #888 100%); margin-left: 10px;">跳过，直接体验</button>
+        <div id="gesture-status">正在加载...</div>
     </div>
 
     <div id="instructions">
-        <div>✊ 握拳 - 聚合成树</div>
+        <div>✊ 握拳 - 聚合成树（显示祝福）</div>
         <div>✋ 张开 - 粒子散开</div>
         <div>🔄 移动手 - 旋转视角</div>
-        <div>🤏 捏合 - 放大照片</div>
     </div>
 </div>
 
@@ -154,23 +109,16 @@
 <!-- Three.js -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 
-<!-- Post-processing -->
-<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
-
 <!-- MediaPipe Hands -->
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
 
 <script>
 // ==================== 全局变量 ====================
-let scene, camera, renderer, composer;
+let scene, camera, renderer;
 let particles = [];
-let photoTextures = [];
-let currentState = 'folded'; // 'folded', 'scattered', 'photoZoom'
-let targetPhotoIndex = -1;
+let messageImage = null;  // 祝福图片
+let currentState = 'scattered'; // 'folded', 'scattered'（初始为散开状态）
 let handPosition = { x: 0, y: 0 };
 let lastHandRotation = 0;
 
@@ -223,11 +171,17 @@ function init() {
     // 光照系统
     setupLights();
 
-    // 后期处理（Bloom效果）
-    setupPostProcessing();
-
     // 事件监听
     setupEventListeners();
+
+    // 加载祝福图片
+    loadMessageImage();
+
+    // 创建粒子系统
+    createParticles();
+
+    // 初始化手势识别
+    initMediaPipe();
 
     animate();
 }
@@ -253,148 +207,56 @@ function setupLights() {
     scene.add(fillLight);
 }
 
-function setupPostProcessing() {
-    // 检查后期处理库是否加载
-    if (typeof THREE.EffectComposer === 'undefined') {
-        console.warn('EffectComposer not loaded, skipping bloom');
-        return;
-    }
-
-    // 创建 EffectComposer
-    composer = new THREE.EffectComposer(renderer);
-
-    // 渲染通道
-    const renderPass = new THREE.RenderPass(scene, camera);
-    composer.addPass(renderPass);
-
-    // Bloom 通道（强辉光效果）
-    const bloomPass = new THREE.UnrealBloomPass(
-        new THREE.Vector2(window.innerWidth, window.innerHeight),
-        2.0,    // 强度：2.0（强烈辉光）
-        1.0,    // 半径：1.0
-        0.1     // 阈值：0.1（低阈值，让所有粒子发光）
-    );
-    composer.addPass(bloomPass);
-
-    console.log('Bloom post-processing enabled');
-}
-
 function setupEventListeners() {
-    // 上传按钮
-    document.getElementById('upload-button').onclick = () => {
-        document.getElementById('file-input').click();
-    };
-
-    // 跳过按钮
-    document.getElementById('skip-button').onclick = () => {
-        document.getElementById('upload-panel').classList.add('hidden');
-        photoTextures = [];  // 空照片数组
-        createParticles();
-        initMediaPipe();
-    };
-
-    // 文件上传
-    document.getElementById('file-input').onchange = handleFileUpload;
-
     // 窗口缩放
     window.onresize = () => {
         camera.aspect = window.innerWidth / window.innerHeight;
         camera.updateProjectionMatrix();
         renderer.setSize(window.innerWidth, window.innerHeight);
-        if (composer) {
-            composer.setSize(window.innerWidth, window.innerHeight);
-        }
     };
 }
 
-// ==================== 照片系统 ====================
-function handleFileUpload(event) {
-    const files = event.target.files;
-    if (files.length === 0) return;
+// ==================== 图片加载 ====================
+function loadMessageImage() {
+    const loader = new THREE.TextureLoader();
+    loader.load(
+        'message.svg',
+        (texture) => {
+            console.log('祝福图片加载成功');
+            createMessageImage(texture);
+        },
+        undefined,
+        (error) => {
+            console.error('祝福图片加载失败:', error);
+            console.log('继续运行，不影响粒子效果');
+        }
+    );
+}
 
-    document.getElementById('gesture-status').innerText = '加载照片中...';
+function createMessageImage(texture) {
+    // 创建祝福图片平面
+    const geometry = new THREE.PlaneGeometry(8, 6);
+    const material = new THREE.MeshStandardMaterial({
+        map: texture,
+        side: THREE.DoubleSide,
+        metalness: 0.2,
+        roughness: 0.4,
+        emissive: 0xffd700,
+        emissiveIntensity: 0.3,
+        transparent: true,
+        opacity: 0
+    });
 
-    let loadedCount = 0;
-    let targetCount = Math.min(files.length, 20);
-    photoTextures = [];
-
-    for (let i = 0; i < targetCount; i++) {
-        const file = files[i];
-        const reader = new FileReader();
-
-        reader.onload = (e) => {
-            const loader = new THREE.TextureLoader();
-            loader.load(
-                e.target.result,
-                (texture) => {
-                    // 成功加载
-                    photoTextures.push(texture);
-                    loadedCount++;
-                    document.getElementById('gesture-status').innerText =
-                        `已加载 ${loadedCount}/${targetCount} 张照片`;
-
-                    if (loadedCount === targetCount) {
-                        document.getElementById('upload-panel').classList.add('hidden');
-                        createParticles();
-                        initMediaPipe();
-                    }
-                },
-                undefined,
-                (error) => {
-                    // 加载失败
-                    console.error('照片加载失败:', error);
-                    loadedCount++;
-                    if (loadedCount === targetCount) {
-                        document.getElementById('upload-panel').classList.add('hidden');
-                        createParticles();
-                        initMediaPipe();
-                    }
-                }
-            );
-        };
-
-        reader.onerror = () => {
-            console.error('文件读取失败');
-            loadedCount++;
-            if (loadedCount === targetCount) {
-                document.getElementById('upload-panel').classList.add('hidden');
-                createParticles();
-                initMediaPipe();
-            }
-        };
-
-        reader.readAsDataURL(file);
-    }
+    messageImage = new THREE.Mesh(geometry, material);
+    messageImage.position.set(0, 4, 0);  // 在树的中心位置
+    messageImage.userData.targetOpacity = 0;
+    scene.add(messageImage);
 }
 
 // ==================== 粒子系统 ====================
 function createParticles() {
-    const photoCount = photoTextures.length;
-    const regularCount = CONFIG.particleCount - photoCount;
-
-    // 创建照片粒子（可选：隐藏照片突出金色效果）
-    photoTextures.forEach((texture, i) => {
-        const geometry = new THREE.PlaneGeometry(1.0, 1.0);
-        const material = new THREE.MeshStandardMaterial({
-            map: texture,
-            side: THREE.DoubleSide,
-            metalness: 0.3,
-            roughness: 0.3,
-            emissive: 0xffd700,      // 金色发光边缘
-            emissiveIntensity: 0.5,  // 中等发光
-            opacity: 0.8,            // 略透明，融入金色氛围
-            transparent: true
-        });
-        const mesh = new THREE.Mesh(geometry, material);
-        mesh.userData.type = 'photo';
-        mesh.userData.index = i;
-        setupParticlePositions(mesh, i / CONFIG.particleCount);
-        scene.add(mesh);
-        particles.push(mesh);
-    });
-
     // 创建几何体粒子 - 全部金色系
-    for (let i = photoCount; i < CONFIG.particleCount; i++) {
+    for (let i = 0; i < CONFIG.particleCount; i++) {
         const ratio = i / CONFIG.particleCount;
         const type = i % 3;
         let geometry, material;
@@ -458,7 +320,8 @@ function createParticles() {
         particles.push(mesh);
     }
 
-    document.getElementById('gesture-status').innerText = '已加载 ' + CONFIG.particleCount + ' 个元素';
+    console.log('已创建 ' + CONFIG.particleCount + ' 个粒子');
+    document.getElementById('gesture-status').innerText = '✋ 张开手散开 / ✊ 握拳聚合';
 }
 
 function setupParticlePositions(mesh, ratio) {
@@ -529,25 +392,28 @@ function setupParticlePositions(mesh, ratio) {
         r * Math.cos(phi)
     );
 
-    // 初始位置
-    mesh.position.copy(mesh.userData.foldedPos);
+    // 初始位置（散开状态）
+    mesh.position.copy(mesh.userData.scatteredPos);
     mesh.userData.originalScale = mesh.scale.clone();
 }
 
 // ==================== 状态管理 ====================
-function changeState(newState, photoIndex = -1) {
-    if (currentState === newState && photoIndex === targetPhotoIndex) return;
+function changeState(newState) {
+    if (currentState === newState) return;
 
     currentState = newState;
-    targetPhotoIndex = photoIndex;
 
     const statusText = {
-        'folded': '🎄 圣诞树形态',
-        'scattered': '✨ 粒子散开',
-        'photoZoom': '📸 照片特写'
+        'folded': '🎄 圣诞树形态 - 祝福显现',
+        'scattered': '✨ 粒子散开'
     };
 
     document.getElementById('gesture-status').innerText = statusText[newState] || '';
+
+    // 更新图片透明度
+    if (messageImage) {
+        messageImage.userData.targetOpacity = (newState === 'folded') ? 1 : 0;
+    }
 }
 
 function updateParticles() {
@@ -557,17 +423,9 @@ function updateParticles() {
         if (currentState === 'folded') {
             targetPos = particle.userData.foldedPos;
             targetScale = particle.userData.originalScale;
-        } else if (currentState === 'scattered') {
+        } else {
             targetPos = particle.userData.scatteredPos;
             targetScale = particle.userData.originalScale;
-        } else if (currentState === 'photoZoom') {
-            if (particle.userData.type === 'photo' && particle.userData.index === targetPhotoIndex) {
-                targetPos = new THREE.Vector3(0, 0, 5);
-                targetScale = particle.userData.originalScale.clone().multiplyScalar(5);
-            } else {
-                targetPos = particle.userData.scatteredPos.clone().multiplyScalar(1.5);
-                targetScale = particle.userData.originalScale.clone().multiplyScalar(0.3);
-            }
         }
 
         // 平滑过渡
@@ -581,6 +439,13 @@ function updateParticles() {
             particle.rotation.z += 0.01;
         }
     });
+
+    // 更新图片透明度
+    if (messageImage) {
+        const currentOpacity = messageImage.material.opacity;
+        const targetOpacity = messageImage.userData.targetOpacity;
+        messageImage.material.opacity += (targetOpacity - currentOpacity) * 0.05;
+    }
 }
 
 // ==================== MediaPipe Hands ====================
@@ -590,7 +455,8 @@ const gestureThrottle = 100; // 100ms 节流
 
 function initMediaPipe() {
     if (typeof Hands === 'undefined') {
-        document.getElementById('gesture-status').innerText = '无法加载手势识别库';
+        console.error('无法加载手势识别库');
+        document.getElementById('gesture-status').innerText = '无法加载手势识别库，但粒子效果可用';
         return;
     }
 
@@ -626,10 +492,10 @@ function initMediaPipe() {
         });
         cameraInstance.start();
 
-        document.getElementById('gesture-status').innerText = '👋 显示您的手势';
+        console.log('摄像头已启动，手势识别就绪');
     }).catch((err) => {
-        document.getElementById('gesture-status').innerText = '无法访问摄像头';
-        console.error(err);
+        console.error('摄像头访问失败:', err);
+        document.getElementById('gesture-status').innerText = '无法访问摄像头，但粒子效果可用';
     });
 }
 
@@ -704,19 +570,6 @@ function detectGestures(landmarks) {
         lastHandRotation = rotation;
         return;
     }
-
-    // 3. 捏合检测（拇指和食指接近）
-    const pinchDistance = distance(thumbTip, indexTip);
-    if (pinchDistance < 0.05) {
-        // 找到最近的照片
-        const photoParticles = particles.filter(p => p.userData.type === 'photo');
-        if (photoParticles.length > 0) {
-            // 简化：选择第一张照片
-            const closestIndex = photoParticles[0].userData.index;
-            changeState('photoZoom', closestIndex);
-        }
-        return;
-    }
 }
 
 function distance(p1, p2) {
@@ -740,12 +593,8 @@ function animate() {
         }
     }
 
-    // 使用 composer 渲染（带 Bloom 效果）
-    if (composer) {
-        composer.render();
-    } else {
-        renderer.render(scene, camera);
-    }
+    // 渲染场景
+    renderer.render(scene, camera);
 }
 
 // ==================== 启动 ====================
